@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Logs
 logs
 *.log
@@ -141,3 +142,11 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+=======
+node_modules
+dist
+out
+.DS_Store
+.eslintcache
+*.log*
+>>>>>>> 7a214cb (Initial Electron Commit)

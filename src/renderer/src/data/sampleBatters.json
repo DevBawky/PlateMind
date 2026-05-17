@@ -1,0 +1,32 @@
+[
+  {
+    "id": "b-001",
+    "name": "Park Jun-seo",
+    "role": "batter",
+    "team": "Incheon Waves",
+    "handedness": "L",
+    "plateAppearances": 428,
+    "pitchesSeen": 1672,
+    "tags": ["Patient", "Contact", "Gap"],
+    "strongZones": ["middle-away", "low-away"],
+    "weakZones": ["high-in", "low-in"],
+    "weakPitchTypes": ["SL"],
+    "aggressionScore": 48,
+    "disciplineScore": 76
+  },
+  {
+    "id": "b-002",
+    "name": "Choi Tae-oh",
+    "role": "batter",
+    "team": "Daegu Sparks",
+    "handedness": "R",
+    "plateAppearances": 391,
+    "pitchesSeen": 1438,
+    "tags": ["Aggressive", "Power", "Pull"],
+    "strongZones": ["middle-middle", "high-middle"],
+    "weakZones": ["low-away", "high-away"],
+    "weakPitchTypes": ["CH"],
+    "aggressionScore": 82,
+    "disciplineScore": 44
+  }
+]

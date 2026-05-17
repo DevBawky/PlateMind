@@ -1,0 +1,26 @@
+[
+  {
+    "id": "p-001",
+    "name": "Han Min-jae",
+    "role": "pitcher",
+    "team": "Seoul Meteors",
+    "handedness": "R",
+    "pitchArsenal": ["FF", "SL", "CH"],
+    "pitchCount": 864,
+    "averageVelocity": 150.4,
+    "primaryPitch": "FF",
+    "tags": ["Power", "Breaking", "Control"]
+  },
+  {
+    "id": "p-002",
+    "name": "Lee Do-yun",
+    "role": "pitcher",
+    "team": "Busan Tides",
+    "handedness": "L",
+    "pitchArsenal": ["FF", "SL", "CH", "CU"],
+    "pitchCount": 712,
+    "averageVelocity": 145.7,
+    "primaryPitch": "SL",
+    "tags": ["Breaking", "Deception", "Command"]
+  }
+]
