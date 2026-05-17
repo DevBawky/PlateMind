@@ -15,7 +15,8 @@ const resultLabels: Record<PitchResult, string> = {
   foul: '파울',
   inPlayOut: '인플레이 아웃',
   hit: '안타',
-  homeRun: '홈런'
+  homeRun: '홈런',
+  hitByPitch: '몸에 맞는 공'
 }
 
 function SimulationPanel({ summary }: SimulationPanelProps): React.JSX.Element {
@@ -25,6 +26,7 @@ function SimulationPanel({ summary }: SimulationPanelProps): React.JSX.Element {
     ['안타 %', formatPercent(summary.hitProbability)],
     ['홈런 %', formatPercent(summary.homeRunProbability)],
     ['볼넷 %', formatPercent(summary.walkProbability)],
+    ['데드볼 %', formatPercent(summary.hitByPitchProbability)],
     ['삼진 %', formatPercent(summary.strikeOutProbability)],
     ['평균 투구 수', formatValue(summary.averagePitchCount)],
     ['평균 압박 지수', formatValue(summary.averagePressureValue)],

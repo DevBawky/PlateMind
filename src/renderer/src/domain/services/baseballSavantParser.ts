@@ -14,6 +14,7 @@ type SavantPlayerType = 'pitcher' | 'batter'
 
 const supportedPitchTypes: PitchType[] = ['FF', 'SL', 'CH', 'CU', 'SI', 'FS', 'FC', 'ST', 'SV', 'KC', 'KN', 'EP', 'FO', 'SC']
 const countStates: CountState[] = ['0-0', '0-1', '0-2', '1-0', '1-1', '1-2', '2-0', '2-1', '2-2', '3-0', '3-1', '3-2']
+const milesToKilometers = 1.609344
 const zoneIds: ZoneId[] = [
   'high-in',
   'high-middle',
@@ -137,9 +138,19 @@ const clamp = (value: number): number => Math.min(Math.max(value, 0), 1)
 const getPitcherId = (row: CsvRow): string => `savant-p-${row.pitcher}`
 const getBatterId = (row: CsvRow): string => `savant-b-${row.batter}`
 
+const getTopKeys = <T extends string>(scores: Map<T, number>, order: 'asc' | 'desc', limit: number): T[] => {
+  return [...scores.entries()]
+    .sort((first, second) => (order === 'desc' ? second[1] - first[1] : first[1] - second[1]))
+    .slice(0, limit)
+    .map(([key]) => key)
+}
+
 const makePitcher = (row: CsvRow, rows: CsvRow[]): Player => {
   const pitchTypes = Array.from(new Set(rows.map((pitchRow) => toPitchType(pitchRow.pitch_type)).filter(Boolean))) as PitchType[]
-  const velocities = rows.map((pitchRow) => toNumber(pitchRow.release_speed)).filter((value): value is number => value !== null)
+  const velocities = rows
+    .map((pitchRow) => toNumber(pitchRow.release_speed))
+    .filter((value): value is number => value !== null)
+    .map((value) => value * milesToKilometers)
   const pitchCounts = new Map<PitchType, number>()
 
   for (const pitchType of pitchTypes) {
@@ -169,6 +180,31 @@ const makeBatter = (row: CsvRow, rows: CsvRow[], sourceType: SavantPlayerType): 
   const homeRuns = rows.filter((pitchRow) => pitchRow.events === 'home_run').length
   const aggressionScore = rows.length > 0 ? Math.round((swings / rows.length) * 100) : 50
   const disciplineScore = rows.length > 0 ? Math.round((takes / rows.length) * 100) : 50
+  const zoneScores = new Map<ZoneId, number>()
+  const pitchTypeScores = new Map<PitchType, number>()
+
+  for (const pitchRow of rows) {
+    const zoneId = toZoneId(pitchRow)
+    const pitchType = toPitchType(pitchRow.pitch_type)
+
+    if (zoneId) {
+      const hitValue = isHit(pitchRow.events) ? 3 : 0
+      const powerValue = pitchRow.events === 'home_run' ? 3 : 0
+      const whiffPenalty = isWhiff(pitchRow.description) ? -2 : 0
+      const takeValue = isSwing(pitchRow.description) ? 0 : 0.35
+      zoneScores.set(zoneId, (zoneScores.get(zoneId) ?? 0) + hitValue + powerValue + whiffPenalty + takeValue)
+    }
+
+    if (pitchType) {
+      const whiffValue = isWhiff(pitchRow.description) ? 2.2 : 0
+      const hitPenalty = isHit(pitchRow.events) ? -1.6 : 0
+      pitchTypeScores.set(pitchType, (pitchTypeScores.get(pitchType) ?? 0) + whiffValue + hitPenalty)
+    }
+  }
+
+  const strongZones = getTopKeys(zoneScores, 'desc', 2)
+  const weakZones = getTopKeys(zoneScores, 'asc', 2).filter((zoneId) => !strongZones.includes(zoneId))
+  const weakPitchTypes = getTopKeys(pitchTypeScores, 'desc', 2)
   const tags = [aggressionScore >= 58 ? 'Aggressive' : 'Patient', homeRuns > 0 ? 'Power' : hits > 0 ? 'Contact' : 'Sample Data']
 
   return {
@@ -180,6 +216,9 @@ const makeBatter = (row: CsvRow, rows: CsvRow[], sourceType: SavantPlayerType): 
     plateAppearances: new Set(rows.map((pitchRow) => pitchRow.at_bat_number || `${pitchRow.game_pk}-${pitchRow.inning}-${pitchRow.batter}`)).size,
     pitchesSeen: rows.length,
     tags,
+    strongZones,
+    weakZones,
+    weakPitchTypes,
     aggressionScore,
     disciplineScore
   }
@@ -254,17 +293,17 @@ export const parseBaseballSavantCsv = (csv: string, sourceType: SavantPlayerType
     }
 
     const pitcherId = getPitcherId(row)
-    const totalKey = `${pitcherId}|${count}|${pitchType}`
-    const groupKey = `${pitcherId}|${count}|${pitchType}|${zoneId}`
+    const batterId = getBatterId(row)
+    const totalKey = `${pitcherId}|${batterId}|${count}|${pitchType}`
+    const groupKey = `${pitcherId}|${batterId}|${count}|${pitchType}|${zoneId}`
     totalByCountPitch.set(totalKey, (totalByCountPitch.get(totalKey) ?? 0) + 1)
     groupMap.set(groupKey, [...(groupMap.get(groupKey) ?? []), row])
   }
 
   const zones: ZoneProbability[] = [...groupMap.entries()].map(([key, group]) => {
-    const [pitcherId, count, pitchType, zoneId] = key.split('|') as [string, CountState, PitchType, ZoneId]
-    const batterIds = Array.from(new Set(group.map((row) => getBatterId(row))))
+    const [pitcherId, batterId, count, pitchType, zoneId] = key.split('|') as [string, string, CountState, PitchType, ZoneId]
     const sampleLocations = group.map(getLocation).filter((location): location is { x: number; y: number } => Boolean(location))
-    const total = totalByCountPitch.get(`${pitcherId}|${count}|${pitchType}`) ?? group.length
+    const total = totalByCountPitch.get(`${pitcherId}|${batterId}|${count}|${pitchType}`) ?? group.length
     const swings = group.filter((row) => isSwing(row.description)).length
     const whiffs = group.filter((row) => isWhiff(row.description)).length
     const hits = group.filter((row) => isHit(row.events)).length
@@ -281,7 +320,7 @@ export const parseBaseballSavantCsv = (csv: string, sourceType: SavantPlayerType
 
     return {
       pitcherId,
-      batterId: batterIds.length === 1 ? batterIds[0] : undefined,
+      batterId,
       count: count as CountState,
       pitchType: pitchType as PitchType,
       zoneId,

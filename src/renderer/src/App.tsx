@@ -5,7 +5,7 @@ import BehaviorPredictionPanel from './components/panel/BehaviorPredictionPanel'
 import SimulationPanel from './components/panel/SimulationPanel'
 import ZoneDetailPanel from './components/panel/ZoneDetailPanel'
 import PitchBreakdownChart from './components/zone/PitchBreakdownChart'
-import type { PitchFilter } from './components/zone/PitchBreakdownChart'
+import type { PitchFilter, PitchMapMode, PitchMapSampleCount } from './components/zone/PitchBreakdownChart'
 import type { Player } from './domain/models/player'
 import type { PitchType } from './domain/models/pitch'
 import type { ZoneId, ZoneProbability } from './domain/models/zone'
@@ -87,27 +87,59 @@ const average = (values: number[]): number => {
 
 const clampProbability = (value: number): number => Math.min(Math.max(value, 0), 1)
 
+const getBatterSkill = (batter: Player): number => {
+  const discipline = batter.disciplineScore ?? 50
+  const aggression = batter.aggressionScore ?? 50
+  const volume = Math.min(Math.log10((batter.pitchesSeen ?? batter.plateAppearances ?? 0) + 10) / 4, 1)
+  const strengthBonus = (batter.strongZones?.length ?? 0) * 2
+  const weaknessPenalty = (batter.weakZones?.length ?? 0) + (batter.weakPitchTypes?.length ?? 0) * 1.5
+  const tagBonus = (batter.tags ?? []).some((tag) => ['Power', 'Contact', 'Patient'].includes(tag)) ? 3 : 0
+
+  return Math.min(Math.max(discipline * 0.48 + aggression * 0.28 + volume * 18 + strengthBonus + tagBonus - weaknessPenalty, 20), 90)
+}
+
+const getPitcherCommand = (pitcher: Player | null): number => {
+  if (!pitcher) {
+    return 0.52
+  }
+
+  const velocity = pitcher.averageVelocity ? (pitcher.averageVelocity > 120 ? pitcher.averageVelocity / 1.609344 : pitcher.averageVelocity) : 91
+  const arsenal = pitcher.pitchArsenal?.length ?? 2
+  const volume = Math.min(Math.log10((pitcher.pitchCount ?? 0) + 10) / 4, 1)
+
+  return Math.min(Math.max((velocity - 87) / 16 * 0.38 + Math.min(arsenal, 6) / 6 * 0.24 + volume * 0.38, 0.18), 0.92)
+}
+
 const applyBatterAdjustments = (zones: ZoneProbability[], batter: Player | null): ZoneProbability[] => {
   if (!batter) {
     return zones
   }
 
+  const batterSkill = getBatterSkill(batter)
+  const skillDelta = ((batterSkill - 55) / 100) * 2
+  const disciplineDelta = ((batter.disciplineScore ?? 50) - 50) / 100
+  const aggressionDelta = ((batter.aggressionScore ?? 50) - 50) / 100
+
   return zones.map((zone) => {
-    const strongZoneBoost = batter.strongZones?.includes(zone.zoneId) ? 1.12 : 1
-    const weakZonePenalty = batter.weakZones?.includes(zone.zoneId) ? 0.88 : 1
-    const weakPitchPenalty = batter.weakPitchTypes?.includes(zone.pitchType) ? 0.9 : 1
-    const aggressionBoost = 1 + ((batter.aggressionScore ?? 50) - 50) / 500
-    const disciplineBoost = 1 + ((batter.disciplineScore ?? 50) - 50) / 700
-    const hitMultiplier = strongZoneBoost * weakZonePenalty * weakPitchPenalty
+    const strongZoneBoost = batter.strongZones?.includes(zone.zoneId) ? 1.26 : 1
+    const weakZonePenalty = batter.weakZones?.includes(zone.zoneId) ? 0.74 : 1
+    const weakPitchPenalty = batter.weakPitchTypes?.includes(zone.pitchType) ? 0.78 : 1
+    const aggressionBoost = 1 + aggressionDelta * 0.34
+    const disciplineSwingAdjustment = 1 - disciplineDelta * 0.24
+    const skillHitBoost = 1 + skillDelta * 0.72
+    const skillWhiffPenalty = 1 - skillDelta * 0.86
+    const hitMultiplier = strongZoneBoost * weakZonePenalty * weakPitchPenalty * skillHitBoost
+    const swingMultiplier = Math.max(0.62, aggressionBoost * disciplineSwingAdjustment)
 
     return {
       ...zone,
       hitProbability: clampProbability(zone.hitProbability * hitMultiplier),
-      homeRunProbability: clampProbability(zone.homeRunProbability * strongZoneBoost * weakZonePenalty),
-      swingProbability: clampProbability(zone.swingProbability * aggressionBoost),
-      whiffProbability: clampProbability(zone.whiffProbability * weakPitchPenalty),
-      riskValue: Math.round(zone.riskValue * strongZoneBoost * disciplineBoost),
-      pressureValue: Math.round(zone.pressureValue * weakZonePenalty * weakPitchPenalty)
+      battingAverage: clampProbability(zone.battingAverage * hitMultiplier),
+      homeRunProbability: clampProbability(zone.homeRunProbability * strongZoneBoost * weakZonePenalty * (1 + aggressionDelta * 0.28)),
+      swingProbability: clampProbability(zone.swingProbability * swingMultiplier),
+      whiffProbability: clampProbability(zone.whiffProbability * weakPitchPenalty * Math.max(0.58, skillWhiffPenalty)),
+      riskValue: Math.round(zone.riskValue * strongZoneBoost * (1 + skillDelta * 0.42)),
+      pressureValue: Math.round(zone.pressureValue * weakZonePenalty * weakPitchPenalty * (1 - skillDelta * 0.34))
     }
   })
 }
@@ -161,14 +193,21 @@ const getRecommendedZone = (zones: ZoneProbability[]): ZoneProbability | null =>
 function App(): React.JSX.Element {
   const [selectedPitcherId, setSelectedPitcherId] = useState<string | null>(null)
   const [selectedBatterId, setSelectedBatterId] = useState<string | null>(null)
+  const [analysisTab, setAnalysisTab] = useState<'simulation' | 'zone' | 'behavior'>('simulation')
   const [selectedPitchType, setSelectedPitchType] = useState<PitchFilter>('ALL')
   const [selectedZoneId, setSelectedZoneId] = useState<ZoneId>('middle-middle')
+  const [pitchMapMode, setPitchMapMode] = useState<PitchMapMode>('pitchType')
+  const [pitchMapSampleCount, setPitchMapSampleCount] = useState<PitchMapSampleCount>(100)
+  const [pitchClusterRadius, setPitchClusterRadius] = useState(1.5)
+  const [isMatchupRefreshing, setIsMatchupRefreshing] = useState(false)
+  const [matchupSimulationVersion, setMatchupSimulationVersion] = useState(0)
   const [savantDataset, setSavantDataset] = useState<BaseballSavantDataset | null>(null)
   const [savantStatus, setSavantStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('loading')
   const [savantMessage, setSavantMessage] = useState('Baseball Savant 데이터를 자동으로 불러오는 중입니다.')
   const [layoutWidths, setLayoutWidths] = useState({ left: 300, right: 420 })
   const layoutRef = useRef<HTMLDivElement | null>(null)
   const didRequestInitialData = useRef(false)
+  const matchupRefreshTimer = useRef<number | null>(null)
 
   const generatedPitchers = useMemo(() => getPlayers('pitcher'), [])
   const generatedBatters = useMemo(() => getPlayers('batter'), [])
@@ -176,12 +215,14 @@ function App(): React.JSX.Element {
   const batters = savantDataset?.batters.length ? savantDataset.batters : generatedBatters
   const selectedPitcher = pitchers.find((pitcher) => pitcher.id === selectedPitcherId) ?? pitchers[0] ?? null
   const selectedBatter = batters.find((batter) => batter.id === selectedBatterId) ?? batters[0] ?? null
+  const matchupKey = `${selectedPitcher?.id ?? 'none'}-${selectedBatter?.id ?? 'none'}`
 
   const allZones = useMemo<ZoneProbability[]>(() => {
     return savantDataset?.zones ?? []
   }, [savantDataset])
 
   const loadBaseballSavantData = useCallback(async (): Promise<void> => {
+    setIsMatchupRefreshing(true)
     setSavantStatus('loading')
     setSavantMessage('Baseball Savant 데이터를 불러오는 중입니다.')
 
@@ -208,11 +249,15 @@ function App(): React.JSX.Element {
       setSelectedPitcherId(dataset.pitchers[0]?.id ?? null)
       setSelectedBatterId(dataset.batters[0]?.id ?? null)
       setSelectedPitchType('ALL')
+      setSelectedZoneId('middle-middle')
+      setMatchupSimulationVersion((version) => version + 1)
       setSavantStatus('ready')
       setSavantMessage(`Baseball Savant ${dataset.rowCount.toLocaleString()}개 투구 데이터를 반영했습니다.`)
+      window.setTimeout(() => setIsMatchupRefreshing(false), 180)
     } catch (error) {
       setSavantStatus('error')
       setSavantMessage(error instanceof Error ? error.message : 'Baseball Savant 데이터를 불러오지 못했습니다.')
+      setIsMatchupRefreshing(false)
     }
   }, [])
 
@@ -226,20 +271,22 @@ function App(): React.JSX.Element {
   }, [loadBaseballSavantData])
 
   const rawPitcherZones = useMemo(() => {
-    return allZones.filter((zone) => {
+    const pitcherZones = allZones.filter((zone) => {
       const matchesPitcher = !zone.pitcherId || zone.pitcherId === selectedPitcher?.id
 
       return matchesPitcher
     })
-  }, [allZones, selectedPitcher])
+    const batterSpecificZones = selectedBatter
+      ? pitcherZones.filter((zone) => !zone.batterId || zone.batterId === selectedBatter.id)
+      : []
+
+    return batterSpecificZones.length > 0 ? batterSpecificZones : pitcherZones
+  }, [allZones, selectedBatter, selectedPitcher])
 
   const pitcherPitchTypes = useMemo(() => getUniquePitchTypes(rawPitcherZones, selectedPitcher), [rawPitcherZones, selectedPitcher])
 
-  useEffect(() => {
-    if (selectedPitchType !== 'ALL' && !pitcherPitchTypes.includes(selectedPitchType)) {
-      setSelectedPitchType('ALL')
-    }
-  }, [pitcherPitchTypes, selectedPitchType])
+  const activePitchType =
+    selectedPitchType !== 'ALL' && !pitcherPitchTypes.includes(selectedPitchType) ? 'ALL' : selectedPitchType
 
   const observedPitcherZones = useMemo(() => {
     const baseZones = rawPitcherZones.filter((zone) => pitcherPitchTypes.includes(zone.pitchType))
@@ -252,23 +299,27 @@ function App(): React.JSX.Element {
   }, [observedPitcherZones, pitcherPitchTypes, selectedBatter, selectedPitcher])
 
   const analysisZones = predictedMatchup.zones
-  const selectedPitchTypeForSimulation = selectedPitchType === 'ALL' ? pitcherPitchTypes[0] : selectedPitchType
+  const selectedPitchTypeForSimulation = activePitchType === 'ALL' ? pitcherPitchTypes[0] : activePitchType
   const selectedZone = aggregateZone(
     analysisZones,
     selectedZoneId,
-    selectedPitchType,
+    activePitchType,
     selectedPitchTypeForSimulation ?? 'FF'
   )
   const visibleZones = useMemo(() => {
-    return selectedPitchType === 'ALL'
+    return activePitchType === 'ALL'
       ? analysisZones
-      : analysisZones.filter((zone) => zone.pitchType === selectedPitchType)
-  }, [analysisZones, selectedPitchType])
+      : analysisZones.filter((zone) => zone.pitchType === activePitchType)
+  }, [activePitchType, analysisZones])
   const recommendedZone = getRecommendedZone(visibleZones)
 
   const simulationSummary = useMemo(() => {
-    return runMonteCarloSimulation(analysisZones, selectedPitchTypeForSimulation ?? 'FF', simulationIterations)
-  }, [analysisZones, selectedPitchTypeForSimulation])
+    return runMonteCarloSimulation(analysisZones, selectedPitchTypeForSimulation ?? 'FF', simulationIterations, {
+      pitcher: selectedPitcher,
+      batter: selectedBatter
+    })
+  }, [analysisZones, matchupSimulationVersion, selectedBatter, selectedPitcher, selectedPitchTypeForSimulation])
+  const pitcherCommand = useMemo(() => getPitcherCommand(selectedPitcher), [selectedPitcher])
 
   const startColumnResize = (target: 'left' | 'right', event: ReactPointerEvent<HTMLButtonElement>): void => {
     const layoutElement = layoutRef.current
@@ -307,6 +358,20 @@ function App(): React.JSX.Element {
     window.addEventListener('pointerup', stopResize)
   }
 
+  const markMatchupRefreshing = (): void => {
+    setIsMatchupRefreshing(true)
+    setMatchupSimulationVersion((version) => version + 1)
+
+    if (matchupRefreshTimer.current !== null) {
+      window.clearTimeout(matchupRefreshTimer.current)
+    }
+
+    matchupRefreshTimer.current = window.setTimeout(() => {
+      setIsMatchupRefreshing(false)
+      matchupRefreshTimer.current = null
+    }, 180)
+  }
+
   return (
     <main className="min-h-screen bg-slate-950 px-6 py-6 text-slate-100">
       <div className="app-shell">
@@ -325,16 +390,6 @@ function App(): React.JSX.Element {
           </div>
         </header>
 
-        <section className={`data-status-strip ${savantStatus}`}>
-          <div>
-            <strong>{savantStatus === 'ready' ? '실제 데이터 연결됨' : savantStatus === 'error' ? '데이터 보정 모드' : '데이터 로딩 중'}</strong>
-            <span>{savantMessage}</span>
-          </div>
-          <button type="button" onClick={loadBaseballSavantData} disabled={savantStatus === 'loading'}>
-            다시 불러오기
-          </button>
-        </section>
-
         <div
           className="analysis-layout resizable-analysis-layout"
           ref={layoutRef}
@@ -351,10 +406,17 @@ function App(): React.JSX.Element {
             savantMessage={savantMessage}
             onLoadBaseballSavant={loadBaseballSavantData}
             onSelectPitcher={(pitcher) => {
+              markMatchupRefreshing()
               setSelectedPitcherId(pitcher.id)
               setSelectedPitchType('ALL')
+              setSelectedZoneId('middle-middle')
             }}
-            onSelectBatter={(batter) => setSelectedBatterId(batter.id)}
+            onSelectBatter={(batter) => {
+              markMatchupRefreshing()
+              setSelectedBatterId(batter.id)
+              setSelectedPitchType('ALL')
+              setSelectedZoneId('middle-middle')
+            }}
           />
 
           <button
@@ -365,16 +427,26 @@ function App(): React.JSX.Element {
           />
 
           <section className="breakdown-main">
+            {isMatchupRefreshing ? <div className="matchup-refresh-overlay">매치업 갱신 중</div> : null}
             <PitchBreakdownChart
+              key={`${matchupKey}-${matchupSimulationVersion}`}
               zones={analysisZones}
               pitchTypes={pitcherPitchTypes}
-              selectedPitchType={selectedPitchType}
+              selectedPitchType={activePitchType}
               selectedZoneId={selectedZoneId}
+              pitchMapMode={pitchMapMode}
+              pitchMapSampleCount={pitchMapSampleCount}
+              pitchClusterRadius={pitchClusterRadius}
+              simulationVersion={matchupSimulationVersion}
+              pitcherCommand={pitcherCommand}
               onSelectPitchType={setSelectedPitchType}
               onSelectZone={(zoneId, pitchType) => {
                 setSelectedZoneId(zoneId)
                 setSelectedPitchType(pitchType)
               }}
+              onSelectPitchMapMode={setPitchMapMode}
+              onSelectPitchMapSampleCount={setPitchMapSampleCount}
+              onChangePitchClusterRadius={setPitchClusterRadius}
             />
           </section>
 
@@ -401,14 +473,44 @@ function App(): React.JSX.Element {
                 </div>
               ) : null}
             </section>
-            <SimulationPanel summary={simulationSummary} />
-            <ZoneDetailPanel zone={selectedZone} />
-            <BehaviorPredictionPanel
-              pitcherBehavior={predictedMatchup.pitcherBehavior}
-              batterBehavior={predictedMatchup.batterBehavior}
-              observedZoneCount={predictedMatchup.observedZoneCount}
-              predictedZoneCount={predictedMatchup.predictedZoneCount}
-            />
+            <section className="analysis-tab-shell" key={matchupKey}>
+              {isMatchupRefreshing ? <div className="panel-refresh-state">매치업 데이터를 다시 계산하고 있습니다.</div> : null}
+              <div className="analysis-tab-list">
+                <button
+                  className={analysisTab === 'simulation' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setAnalysisTab('simulation')}
+                >
+                  몬테카를로
+                </button>
+                <button
+                  className={analysisTab === 'zone' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setAnalysisTab('zone')}
+                >
+                  선택 구역
+                </button>
+                <button
+                  className={analysisTab === 'behavior' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setAnalysisTab('behavior')}
+                >
+                  행동 예측
+                </button>
+              </div>
+              <div className="analysis-tab-panel">
+                {analysisTab === 'simulation' ? <SimulationPanel summary={simulationSummary} /> : null}
+                {analysisTab === 'zone' ? <ZoneDetailPanel zone={selectedZone} /> : null}
+                {analysisTab === 'behavior' ? (
+                  <BehaviorPredictionPanel
+                    pitcherBehavior={predictedMatchup.pitcherBehavior}
+                    batterBehavior={predictedMatchup.batterBehavior}
+                    observedZoneCount={predictedMatchup.observedZoneCount}
+                    predictedZoneCount={predictedMatchup.predictedZoneCount}
+                  />
+                ) : null}
+              </div>
+            </section>
           </aside>
         </div>
 

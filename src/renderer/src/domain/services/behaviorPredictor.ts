@@ -23,6 +23,7 @@ const allZoneIds = zoneRows.flat()
 
 const clamp = (value: number, min = 0, max = 1): number => Math.min(Math.max(value, min), max)
 const clampScore = (value: number): number => Math.round(Math.min(Math.max(value, 1), 99))
+const toMphEquivalent = (velocity: number): number => (velocity > 120 ? velocity / 1.609344 : velocity)
 
 const average = (values: number[]): number => {
   if (values.length === 0) {
@@ -46,7 +47,7 @@ const getPitchTypesForPrediction = (pitcher: Player | null, zones: ZoneProbabili
 
 export const predictPitcherBehavior = (pitcher: Player | null, zones: ZoneProbability[]): BehaviorPrediction => {
   const pitchTypes = getPitchTypesForPrediction(pitcher, zones)
-  const averageVelocity = pitcher?.averageVelocity ?? 91
+  const averageVelocity = toMphEquivalent(pitcher?.averageVelocity ?? 146.5)
   const whiffRate = average(zones.map((zone) => zone.whiffProbability))
   const pressure = average(zones.map((zone) => zone.pressureValue))
   const risk = average(zones.map((zone) => zone.riskValue))
@@ -180,22 +181,24 @@ const predictZoneMetric = (
   batterBehavior: BehaviorPrediction,
   pitchProbability: number
 ): Omit<ZoneProbability, 'count' | 'pitchType' | 'zoneId' | 'pitchProbability'> => {
-  const velocity = pitcher?.averageVelocity ?? 91
+  const velocity = toMphEquivalent(pitcher?.averageVelocity ?? 146.5)
   const aggression = batter?.aggressionScore ?? (batterBehavior.label === '적극 공략형' ? 62 : 50)
   const discipline = batter?.disciplineScore ?? (batterBehavior.label === '선구안형' ? 60 : 50)
   const weakPitch = batter?.weakPitchTypes?.includes(pitchType) ? 0.9 : 1
-  const strongZone = batter?.strongZones?.includes(zoneId) ? 1.18 : 1
-  const weakZone = batter?.weakZones?.includes(zoneId) ? 0.88 : 1
+  const strongZone = batter?.strongZones?.includes(zoneId) ? 1.3 : 1
+  const weakZone = batter?.weakZones?.includes(zoneId) ? 0.72 : 1
+  const batterSkill = Math.min(Math.max(discipline * 0.5 + aggression * 0.28 + (batter?.strongZones?.length ?? 0) * 4 - (batter?.weakPitchTypes?.length ?? 0) * 2, 20), 90)
+  const skillDelta = (batterSkill - 55) / 100
   const putAwayCount = count.endsWith('-2') ? 1.12 : 1
   const hitterCount = count.startsWith('2-') || count.startsWith('3-') ? 1.08 : 1
   const powerPitch = ['FF', 'SI', 'FC'].includes(pitchType) ? 1.04 : 1
   const chasePitch = ['SL', 'CH', 'CU', 'FS', 'ST', 'SV', 'KC'].includes(pitchType) ? 1.1 : 1
   const pitcherPressureBonus = pitcherBehavior.confidence > 0.7 ? 0.012 : 0
 
-  const swingProbability = clamp((0.43 + (aggression - 50) / 190) * hitterCount * countAggression(count))
-  const whiffProbability = clamp((0.19 + pitcherPressureBonus + (velocity - 90) / 110 + (chasePitch - 1) * 0.32) * putAwayCount * weakPitch)
-  const hitProbability = clamp((0.19 + (aggression - discipline) / 900) * strongZone * weakZone * weakPitch * hitterCount)
-  const homeRunProbability = clamp((0.026 + (velocity - 90) / 900) * strongZone * powerPitch * (batterBehavior.label === '장타 위협형' ? 1.34 : 1))
+  const swingProbability = clamp((0.43 + (aggression - 50) / 150 - (discipline - 50) / 280) * hitterCount * countAggression(count))
+  const whiffProbability = clamp((0.19 + pitcherPressureBonus + (velocity - 90) / 110 + (chasePitch - 1) * 0.32 - skillDelta * 0.2) * putAwayCount * weakPitch)
+  const hitProbability = clamp((0.19 + skillDelta * 0.22 + (aggression - discipline) / 1200) * strongZone * weakZone * weakPitch * hitterCount)
+  const homeRunProbability = clamp((0.026 + skillDelta * 0.04 + (velocity - 90) / 900) * strongZone * powerPitch * (batterBehavior.label === '장타 위협형' ? 1.34 : 1))
   const battingAverage = clamp(hitProbability * (0.88 + swingProbability * 0.3))
   const pressureValue = clampScore(45 + whiffProbability * 72 + pitchProbability * 48 - hitProbability * 34)
   const riskValue = clampScore(30 + hitProbability * 80 + homeRunProbability * 120 + (discipline - 50) * 0.28 - pitchProbability * 18)
