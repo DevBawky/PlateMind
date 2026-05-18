@@ -458,7 +458,6 @@ function App(): React.JSX.Element {
               zones={analysisZones}
               pitchTypes={pitcherPitchTypes}
               selectedPitchType={activePitchType}
-              selectedZoneId={selectedZoneId}
               pitchMapMode={pitchMapMode}
               pitchMapSampleCount={pitchMapSampleCount}
               pitchClusterRadius={pitchClusterRadius}
