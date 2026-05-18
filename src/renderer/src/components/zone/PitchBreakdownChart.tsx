@@ -2,6 +2,7 @@ import type { PitchType } from '../../domain/models/pitch'
 import type { ZoneId, ZoneProbability } from '../../domain/models/zone'
 import { zoneLabels } from '../../domain/models/zone'
 import { useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 export type PitchFilter = PitchType | 'ALL'
 export type PitchMapMode = 'pitchType' | 'pitchResult' | 'countResult' | 'pressure' | 'risk'
@@ -30,6 +31,7 @@ interface PlotPoint {
   y: number
   zoneId: ZoneId
   pitchType: PitchType
+  countState: ZoneProbability['count']
   categoryKey: string
   label: string
   color: string
@@ -42,6 +44,10 @@ interface PlotPoint {
   whiffProbability: number
   contactProbability: number
   swingProbability: number
+  metricValue?: number
+  isStrike: boolean
+  sourceLabel: string
+  mixLabel?: string
   dataQuality?: ZoneProbability['dataQuality']
 }
 
@@ -78,6 +84,12 @@ interface RgbColor {
   red: number
   green: number
   blue: number
+}
+
+interface PitchDotTooltipState {
+  point: PlotPoint
+  x: number
+  y: number
 }
 
 const pitchTypeLabels: Record<PitchType, string> = {
@@ -324,6 +336,15 @@ const getBallPoint = (zone: ZoneProbability, seed: string, pitcherCommand: numbe
 }
 
 const getLocationForZone = (zone: ZoneProbability, seed: string, pitcherCommand: number): { x: number; y: number } => {
+  if (zone.sampleLocations && zone.sampleLocations.length > 0) {
+    const locationIndex = Math.floor(hashToUnit(`${seed}-observed-location`) * zone.sampleLocations.length)
+    const observedLocation = zone.sampleLocations[locationIndex]
+
+    if (observedLocation) {
+      return plateLocationToPlotPoint(observedLocation)
+    }
+  }
+
   return hashToUnit(`${seed}-ball`) < getMissProbability(zone, pitcherCommand)
     ? getBallPoint(zone, seed, pitcherCommand)
     : getStrikePoint(zone, seed, pitcherCommand)
@@ -540,7 +561,25 @@ const clusterPlotPoints = (points: PlotPoint[], radius: number): PlotPoint[] => 
     const whiffProbability = group.reduce((sum, item) => sum + item.whiffProbability * item.count, 0) / count
     const contactProbability = group.reduce((sum, item) => sum + item.contactProbability * item.count, 0) / count
     const swingProbability = group.reduce((sum, item) => sum + item.swingProbability * item.count, 0) / count
+    const metricTotal = group.reduce((sum, item) => sum + (item.metricValue ?? 0) * item.count, 0)
+    const hasMetricValue = group.some((item) => item.metricValue !== undefined)
+    const pitchMix = new Map<PitchType, number>()
+    const zoneMix = new Map<ZoneId, number>()
     const representative = group[0]
+
+    group.forEach((item) => {
+      pitchMix.set(item.pitchType, (pitchMix.get(item.pitchType) ?? 0) + item.count)
+      zoneMix.set(item.zoneId, (zoneMix.get(item.zoneId) ?? 0) + item.count)
+    })
+
+    const formatMix = <T extends string>(mix: Map<T, number>, labelByKey: Record<T, string>): string =>
+      [...mix.entries()]
+        .sort((first, second) => second[1] - first[1])
+        .slice(0, 3)
+        .map(([key, value]) => `${labelByKey[key]} ${Math.round((value / count) * 100)}%`)
+        .join(' · ')
+
+    const mixLabel = `${formatMix(pitchMix, pitchTypeLabels)} / ${formatMix(zoneMix, zoneLabels)}`
 
     clusters.push({
       ...representative,
@@ -555,9 +594,13 @@ const clusterPlotPoints = (points: PlotPoint[], radius: number): PlotPoint[] => 
       whiffProbability,
       contactProbability,
       swingProbability,
+      metricValue: hasMetricValue ? metricTotal / count : undefined,
+      isStrike: group.reduce((sum, item) => sum + (item.isStrike ? item.count : 0), 0) / count >= 0.5,
+      sourceLabel: group.some((item) => item.sourceLabel === '실측 좌표') ? '실측/보정 혼합' : representative.sourceLabel,
+      mixLabel,
       title:
         count > 1
-          ? `${representative.label} ${count}구 / ${pitchTypeLabels[representative.pitchType]} / ${zoneLabels[representative.zoneId]}`
+          ? `${representative.label} ${count}개 묶음 / ${mixLabel} / 헛스윙 ${formatPercent(whiffProbability)} / 안타 ${formatPercent(hitProbability)} / 컨택 ${formatPercent(contactProbability)}`
           : representative.title
     })
   })
@@ -751,7 +794,10 @@ const buildPlotPoints = (
     const category = getPointCategory(zone, mode, seed, location, metricProfiles)
     const outcome = getSampleOutcome(zone, location, seed)
     const detailMetrics = getLocationAdjustedMetrics(zone, location)
-    const metricValue = mode === 'pressure' || mode === 'risk' ? ` / 지수 ${Math.round(getPointMetricValue(zone, mode, location))}` : ''
+    const pointMetricValue = mode === 'pressure' || mode === 'risk' ? getPointMetricValue(zone, mode, location) : undefined
+    const metricLabel = pointMetricValue === undefined ? '' : ` / 지수 ${Math.round(pointMetricValue)}`
+    const isStrike = isInsideStrikeZone(location)
+    const dataQuality = zone.dataQuality ?? (zone.sampleLocations && zone.sampleLocations.length > 0 ? 'observed' : 'predicted')
 
     return {
       key: seed,
@@ -759,10 +805,11 @@ const buildPlotPoints = (
       y: location.y,
       zoneId: zone.zoneId,
       pitchType: zone.pitchType,
+      countState: zone.count,
       categoryKey: category.key,
       label: category.label,
       color: category.color,
-      title: `${category.label}${metricValue} / ${pitchTypeLabels[zone.pitchType]} / ${zoneLabels[zone.zoneId]} / 헛스윙 ${formatPercent(detailMetrics.whiffProbability)} / 피안타 ${formatPercent(detailMetrics.hitProbability)} / 컨택 ${formatPercent(detailMetrics.contactProbability)}`,
+      title: `${category.label}${metricLabel} / ${pitchTypeLabels[zone.pitchType]} / ${zoneLabels[zone.zoneId]} / ${zone.count} / ${isStrike ? '스트라이크 존' : '볼 존'} / 헛스윙 ${formatPercent(detailMetrics.whiffProbability)} / 안타 ${formatPercent(detailMetrics.hitProbability)} / 컨택 ${formatPercent(detailMetrics.contactProbability)}`,
       count: 1,
       onBaseProbability: outcome.onBaseProbability,
       outProbability: outcome.outProbability,
@@ -771,7 +818,10 @@ const buildPlotPoints = (
       whiffProbability: detailMetrics.whiffProbability,
       contactProbability: detailMetrics.contactProbability,
       swingProbability: detailMetrics.swingProbability,
-      dataQuality: zone.dataQuality ?? (zone.sampleLocations && zone.sampleLocations.length > 0 ? 'observed' : 'predicted')
+      metricValue: pointMetricValue,
+      isStrike,
+      sourceLabel: zone.sampleLocations && zone.sampleLocations.length > 0 ? '실측 좌표' : '모델 보정',
+      dataQuality
     }
   })
 
@@ -869,6 +919,7 @@ function PitchBreakdownChart({
 }: PitchBreakdownChartProps): React.JSX.Element {
   const [heatmapMetric, setHeatmapMetric] = useState<HeatmapMetric>('whiffProbability')
   const [heatmapOpacity, setHeatmapOpacity] = useState(0.42)
+  const [hoveredPoint, setHoveredPoint] = useState<PitchDotTooltipState | null>(null)
   const visibleZones =
     selectedPitchType === 'ALL' ? zones : zones.filter((zone) => zone.pitchType === selectedPitchType)
   const { points, summary } = buildPlotPoints(
@@ -948,14 +999,22 @@ function PitchBreakdownChart({
             }}
             type="button"
             title={point.title}
+            onPointerEnter={(event) => setHoveredPoint({ point, x: event.clientX, y: event.clientY })}
+            onPointerMove={(event) => setHoveredPoint({ point, x: event.clientX, y: event.clientY })}
+            onPointerLeave={() => setHoveredPoint(null)}
             onClick={() => onSelectZone(point.zoneId, point.pitchType)}
           >
             <span className="pitch-dot-tooltip">
-              <strong>{point.count > 1 ? `${point.count}구 묶음` : `${pitchTypeLabels[point.pitchType]} ${zoneLabels[point.zoneId]}`}</strong>
-              <span>헛스윙 {formatPercent(point.whiffProbability)}</span>
-              <span>피안타 {formatPercent(point.hitProbability)}</span>
-              <span>컨택 {formatPercent(point.contactProbability)}</span>
-              <span>타율 {formatAverage(point.battingAverage)}</span>
+              <strong>{point.count > 1 ? `${point.count}개 묶음` : `${pitchTypeLabels[point.pitchType]} ${zoneLabels[point.zoneId]}`}</strong>
+              {point.mixLabel ? <span>{point.mixLabel}</span> : null}
+              <span>
+                {point.countState} · {point.isStrike ? '스트라이크 존' : '볼 존'} · {point.sourceLabel}
+              </span>
+              {point.metricValue !== undefined ? <span>지수 {Math.round(point.metricValue)}</span> : null}
+              <span>출루 {formatPercent(point.onBaseProbability)} · 아웃 {formatPercent(point.outProbability)}</span>
+              <span>헛스윙 {formatPercent(point.whiffProbability)} · 스윙 {formatPercent(point.swingProbability)}</span>
+              <span>안타 {formatPercent(point.hitProbability)} · 컨택 {formatPercent(point.contactProbability)}</span>
+              <span>예상 타율 {formatAverage(point.battingAverage)}</span>
             </span>
           </button>
         ))}
@@ -1091,6 +1150,45 @@ function PitchBreakdownChart({
         </div>
       </div>
 
+      {hoveredPoint
+        ? createPortal(
+            <div
+              className="pitch-dot-tooltip pitch-dot-tooltip-floating"
+              style={{
+                left: hoveredPoint.x,
+                top: hoveredPoint.y
+              }}
+            >
+              <strong>
+                {hoveredPoint.point.count > 1
+                  ? `${hoveredPoint.point.count}개 묶음`
+                  : `${pitchTypeLabels[hoveredPoint.point.pitchType]} ${zoneLabels[hoveredPoint.point.zoneId]}`}
+              </strong>
+              {hoveredPoint.point.mixLabel ? <span>{hoveredPoint.point.mixLabel}</span> : null}
+              <span>
+                {hoveredPoint.point.countState} / {hoveredPoint.point.isStrike ? '스트라이크 존' : '볼 존'} /{' '}
+                {hoveredPoint.point.sourceLabel}
+              </span>
+              {hoveredPoint.point.metricValue !== undefined ? (
+                <span>지수 {Math.round(hoveredPoint.point.metricValue)}</span>
+              ) : null}
+              <span>
+                출루 {formatPercent(hoveredPoint.point.onBaseProbability)} / 아웃{' '}
+                {formatPercent(hoveredPoint.point.outProbability)}
+              </span>
+              <span>
+                헛스윙 {formatPercent(hoveredPoint.point.whiffProbability)} / 스윙{' '}
+                {formatPercent(hoveredPoint.point.swingProbability)}
+              </span>
+              <span>
+                안타 {formatPercent(hoveredPoint.point.hitProbability)} / 컨택{' '}
+                {formatPercent(hoveredPoint.point.contactProbability)}
+              </span>
+              <span>예상 타율 {formatAverage(hoveredPoint.point.battingAverage)}</span>
+            </div>,
+            document.body
+          )
+        : null}
     </section>
   )
 }

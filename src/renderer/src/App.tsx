@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import MatchupBuilder from './components/matchup/MatchupBuilder'
 import BehaviorPredictionPanel from './components/panel/BehaviorPredictionPanel'
+import ResultAnalysisPanel from './components/panel/ResultAnalysisPanel'
 import SimulationPanel from './components/panel/SimulationPanel'
 import ZoneDetailPanel from './components/panel/ZoneDetailPanel'
 import PitchBreakdownChart from './components/zone/PitchBreakdownChart'
@@ -193,7 +194,7 @@ const getRecommendedZone = (zones: ZoneProbability[]): ZoneProbability | null =>
 function App(): React.JSX.Element {
   const [selectedPitcherId, setSelectedPitcherId] = useState<string | null>(null)
   const [selectedBatterId, setSelectedBatterId] = useState<string | null>(null)
-  const [analysisTab, setAnalysisTab] = useState<'simulation' | 'zone' | 'behavior'>('simulation')
+  const [analysisTab, setAnalysisTab] = useState<'simulation' | 'zone' | 'behavior' | 'result'>('simulation')
   const [selectedPitchType, setSelectedPitchType] = useState<PitchFilter>('ALL')
   const [selectedZoneId, setSelectedZoneId] = useState<ZoneId>('middle-middle')
   const [pitchMapMode, setPitchMapMode] = useState<PitchMapMode>('pitchType')
@@ -521,6 +522,13 @@ function App(): React.JSX.Element {
                 >
                   행동 예측
                 </button>
+                <button
+                  className={analysisTab === 'result' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setAnalysisTab('result')}
+                >
+                  결과 분석
+                </button>
               </div>
               <div className="analysis-tab-panel">
                 {analysisTab === 'simulation' ? <SimulationPanel summary={simulationSummary} /> : null}
@@ -531,6 +539,16 @@ function App(): React.JSX.Element {
                     batterBehavior={predictedMatchup.batterBehavior}
                     observedZoneCount={predictedMatchup.observedZoneCount}
                     predictedZoneCount={predictedMatchup.predictedZoneCount}
+                  />
+                ) : null}
+                {analysisTab === 'result' ? (
+                  <ResultAnalysisPanel
+                    pitcher={selectedPitcher}
+                    batter={selectedBatter}
+                    summary={simulationSummary}
+                    zones={visibleZones}
+                    selectedZone={selectedZone}
+                    recommendedZone={recommendedZone}
                   />
                 ) : null}
               </div>

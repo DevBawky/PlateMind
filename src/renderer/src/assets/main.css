@@ -892,7 +892,7 @@ select {
 
 .breakdown-card {
   display: grid;
-  grid-template-rows: auto auto minmax(500px, 1fr) auto auto;
+  grid-template-rows: auto auto minmax(420px, auto) auto auto;
   border: 1px solid rgba(34, 211, 238, 0.28);
   border-radius: 8px;
   background:
@@ -1043,7 +1043,8 @@ select {
 
 .pitch-plot {
   position: relative;
-  min-height: 500px;
+  height: clamp(420px, 48vh, 640px);
+  min-height: 0;
   background:
     linear-gradient(rgba(148, 163, 184, 0.08) 1px, transparent 1px),
     linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px),
@@ -1189,7 +1190,8 @@ select {
   bottom: calc(100% + 10px);
   left: 50%;
   display: none;
-  min-width: 150px;
+  min-width: 220px;
+  max-width: min(360px, 72vw);
   border: 1px solid rgba(34, 211, 238, 0.38);
   border-radius: 8px;
   background: rgba(2, 6, 23, 0.96);
@@ -1203,7 +1205,7 @@ select {
   pointer-events: none;
   text-align: left;
   transform: translateX(-50%);
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .pitch-dot-tooltip strong,
@@ -1218,7 +1220,17 @@ select {
 }
 
 .pitch-dot:hover .pitch-dot-tooltip {
+  display: none;
+}
+
+.pitch-dot-tooltip-floating {
+  position: fixed;
+  z-index: 2147483647;
+  bottom: auto;
+  left: auto;
+  top: auto;
   display: grid;
+  transform: translate(-50%, calc(-100% - 16px));
 }
 
 .pitch-dot-compact {
@@ -1458,6 +1470,66 @@ select {
 .behavior-panel {
   display: grid;
   gap: 18px;
+}
+
+.result-analysis-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.result-analysis-summary,
+.result-analysis-list {
+  display: grid;
+  gap: 10px;
+}
+
+.result-analysis-list p,
+.result-analysis-note {
+  border-radius: 8px;
+  background: #111827;
+  color: #cbd5e1;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 20px;
+  margin: 0;
+  padding: 12px;
+}
+
+.result-analysis-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.result-analysis-grid section {
+  display: grid;
+  gap: 6px;
+  border: 1px solid rgba(51, 65, 85, 0.84);
+  border-radius: 8px;
+  background: #111827;
+  padding: 12px;
+}
+
+.result-analysis-grid span,
+.result-analysis-note span {
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.result-analysis-grid strong {
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.result-analysis-note {
+  display: grid;
+  gap: 6px;
+}
+
+.result-analysis-note p {
+  margin: 0;
 }
 
 .prediction-grid {
@@ -2001,7 +2073,7 @@ select {
   }
 
   .pitch-plot {
-    min-height: 430px;
+    height: clamp(360px, 58vh, 430px);
   }
 
   .batter {
