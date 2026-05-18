@@ -956,6 +956,21 @@ select {
   width: 100%;
 }
 
+.heatmap-filter-buttons button {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.heatmap-filter-buttons span {
+  width: 10px;
+  height: 10px;
+  border: 1px solid rgba(2, 6, 23, 0.72);
+  border-radius: 999px;
+  background: linear-gradient(90deg, #22c55e, #eab308 52%, #ef4444);
+  box-shadow: 0 0 8px rgba(234, 179, 8, 0.26);
+}
+
 .pitch-map-bottom {
   display: grid;
   grid-template-columns: minmax(220px, 0.45fr) minmax(300px, 0.55fr);
@@ -1047,8 +1062,26 @@ select {
   pointer-events: none;
 }
 
+.pitch-heatmap {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  filter: saturate(1.08) blur(0.45px);
+  mix-blend-mode: normal;
+  pointer-events: none;
+}
+
+.pitch-heatmap span {
+  position: absolute;
+  width: 10.5%;
+  height: 10.5%;
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+}
+
 .strike-zone-outline {
   position: absolute;
+  z-index: 2;
   left: 30%;
   top: 28%;
   width: 40%;
@@ -1138,6 +1171,7 @@ select {
 
 .pitch-dot {
   position: absolute;
+  z-index: 4;
   width: 15px;
   height: 15px;
   border: 1px solid rgba(248, 250, 252, 0.72);
@@ -1147,6 +1181,44 @@ select {
   transition:
     transform 120ms ease,
     box-shadow 120ms ease;
+}
+
+.pitch-dot-tooltip {
+  position: absolute;
+  z-index: 80;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  display: none;
+  min-width: 150px;
+  border: 1px solid rgba(34, 211, 238, 0.38);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.96);
+  box-shadow: 0 18px 34px rgba(2, 6, 23, 0.48);
+  color: #cbd5e1;
+  font-size: 11px;
+  font-weight: 800;
+  gap: 3px;
+  line-height: 15px;
+  padding: 9px 10px;
+  pointer-events: none;
+  text-align: left;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.pitch-dot-tooltip strong,
+.pitch-dot-tooltip span {
+  display: block;
+}
+
+.pitch-dot-tooltip strong {
+  color: #ffffff;
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+
+.pitch-dot:hover .pitch-dot-tooltip {
+  display: grid;
 }
 
 .pitch-dot-compact {
@@ -1161,9 +1233,8 @@ select {
   box-shadow: 0 0 0 1px rgba(2, 6, 23, 0.72);
 }
 
-.pitch-dot:hover,
-.pitch-dot-selected {
-  z-index: 3;
+.pitch-dot:hover {
+  z-index: 70;
   transform: translate(-50%, -50%) scale(1.35);
   box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.24), 0 0 18px rgba(34, 211, 238, 0.3);
 }

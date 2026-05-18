@@ -1,16 +1,17 @@
 import type { PitchType } from '../../domain/models/pitch'
 import type { ZoneId, ZoneProbability } from '../../domain/models/zone'
 import { zoneLabels } from '../../domain/models/zone'
+import { useMemo, useState } from 'react'
 
 export type PitchFilter = PitchType | 'ALL'
 export type PitchMapMode = 'pitchType' | 'pitchResult' | 'countResult' | 'pressure' | 'risk'
 export type PitchMapSampleCount = 10 | 100 | 1000
+type HeatmapMetric = 'none' | 'whiffProbability' | 'hitProbability' | 'contactProbability' | 'battingAverage'
 
 interface PitchBreakdownChartProps {
   zones: ZoneProbability[]
   pitchTypes: PitchType[]
   selectedPitchType: PitchFilter
-  selectedZoneId: ZoneId
   pitchMapMode: PitchMapMode
   pitchMapSampleCount: PitchMapSampleCount
   pitchClusterRadius: number
@@ -36,6 +37,11 @@ interface PlotPoint {
   count: number
   onBaseProbability: number
   outProbability: number
+  battingAverage: number
+  hitProbability: number
+  whiffProbability: number
+  contactProbability: number
+  swingProbability: number
   dataQuality?: ZoneProbability['dataQuality']
 }
 
@@ -58,6 +64,20 @@ interface MetricProfile {
   high: number
   low: number
   veryLow: number
+}
+
+interface HeatmapCell {
+  key: string
+  x: number
+  y: number
+  intensity: number
+  value: number
+}
+
+interface RgbColor {
+  red: number
+  green: number
+  blue: number
 }
 
 const pitchTypeLabels: Record<PitchType, string> = {
@@ -111,6 +131,14 @@ const pitchMapModeDescriptions: Record<PitchMapMode, string> = {
 }
 
 const pitchMapSampleCounts: PitchMapSampleCount[] = [10, 100, 1000]
+
+const heatmapMetrics: Array<{ key: HeatmapMetric; label: string }> = [
+  { key: 'none', label: '점만' },
+  { key: 'whiffProbability', label: '헛스윙' },
+  { key: 'hitProbability', label: '피안타' },
+  { key: 'contactProbability', label: '컨택' },
+  { key: 'battingAverage', label: '타율' }
+]
 
 const resultCategories: Record<string, PlotCategory> = {
   whiff: { key: 'whiff', label: '헛스윙', color: '#e11d48' },
@@ -507,6 +535,11 @@ const clusterPlotPoints = (points: PlotPoint[], radius: number): PlotPoint[] => 
     const y = group.reduce((sum, item) => sum + item.y * item.count, 0) / count
     const onBaseProbability = group.reduce((sum, item) => sum + item.onBaseProbability * item.count, 0) / count
     const outProbability = group.reduce((sum, item) => sum + item.outProbability * item.count, 0) / count
+    const battingAverage = group.reduce((sum, item) => sum + item.battingAverage * item.count, 0) / count
+    const hitProbability = group.reduce((sum, item) => sum + item.hitProbability * item.count, 0) / count
+    const whiffProbability = group.reduce((sum, item) => sum + item.whiffProbability * item.count, 0) / count
+    const contactProbability = group.reduce((sum, item) => sum + item.contactProbability * item.count, 0) / count
+    const swingProbability = group.reduce((sum, item) => sum + item.swingProbability * item.count, 0) / count
     const representative = group[0]
 
     clusters.push({
@@ -517,6 +550,11 @@ const clusterPlotPoints = (points: PlotPoint[], radius: number): PlotPoint[] => 
       count,
       onBaseProbability,
       outProbability,
+      battingAverage,
+      hitProbability,
+      whiffProbability,
+      contactProbability,
+      swingProbability,
       title:
         count > 1
           ? `${representative.label} ${count}구 / ${pitchTypeLabels[representative.pitchType]} / ${zoneLabels[representative.zoneId]}`
@@ -558,6 +596,42 @@ const getSampleOutcome = (
   }
 }
 
+const getLocationAdjustedMetrics = (
+  zone: ZoneProbability,
+  location: { x: number; y: number }
+): {
+  battingAverage: number
+  hitProbability: number
+  whiffProbability: number
+  contactProbability: number
+  swingProbability: number
+} => {
+  const isStrike = isInsideStrikeZone(location)
+  const center = zoneCenters[zone.zoneId]
+  const zoneDistance = Math.hypot(location.x - center.x, location.y - center.y)
+  const edgeDistance = Math.min(
+    Math.abs(location.x - strikeZoneBounds.left),
+    Math.abs(location.x - strikeZoneBounds.right),
+    Math.abs(location.y - strikeZoneBounds.top),
+    Math.abs(location.y - strikeZoneBounds.bottom)
+  )
+  const heartPenalty = zone.zoneId === 'middle-middle' ? 1.12 : 1
+  const chaseBoost = isStrike ? 1 : Math.max(0.68, 1 - zoneDistance / 96)
+  const edgeBoost = isStrike ? Math.min(Math.max(1 + (8 - edgeDistance) / 42, 0.92), 1.18) : 1.1
+  const whiffProbability = Math.min(Math.max(zone.whiffProbability * edgeBoost * (isStrike ? 1 : 1.16), 0.03), 0.72)
+  const swingProbability = Math.min(Math.max(zone.swingProbability * (isStrike ? 1.04 : chaseBoost), 0.08), 0.9)
+  const hitProbability = Math.min(Math.max(zone.hitProbability * heartPenalty * (isStrike ? 1 : 0.76), 0.02), 0.58)
+  const battingAverage = Math.min(Math.max(zone.battingAverage * heartPenalty * (isStrike ? 1 : 0.72), 0.04), 0.62)
+
+  return {
+    battingAverage,
+    hitProbability,
+    whiffProbability,
+    contactProbability: Math.min(Math.max(swingProbability * (1 - whiffProbability), 0), 1),
+    swingProbability
+  }
+}
+
 const getEmptySummary = (): PitchMapSummary => ({
   advantage: '데이터 부족',
   strikeProbability: 0,
@@ -591,6 +665,28 @@ const getPitchMapSummary = (points: PlotPoint[]): PitchMapSummary => {
 }
 
 const formatPercent = (value: number): string => `${Math.round(value * 100)}%`
+const formatAverage = (value: number): string => value.toFixed(3).replace(/^0/, '')
+
+const mixColor = (start: RgbColor, end: RgbColor, weight: number): RgbColor => {
+  return {
+    red: Math.round(start.red + (end.red - start.red) * weight),
+    green: Math.round(start.green + (end.green - start.green) * weight),
+    blue: Math.round(start.blue + (end.blue - start.blue) * weight)
+  }
+}
+
+const getHeatmapColor = (intensity: number, alpha: number): string => {
+  const green = { red: 34, green: 197, blue: 94 }
+  const yellow = { red: 234, green: 179, blue: 8 }
+  const red = { red: 239, green: 68, blue: 68 }
+  const clampedIntensity = Math.min(Math.max(intensity, 0), 1)
+  const color =
+    clampedIntensity < 0.5
+      ? mixColor(green, yellow, clampedIntensity * 2)
+      : mixColor(yellow, red, (clampedIntensity - 0.5) * 2)
+
+  return `rgba(${color.red}, ${color.green}, ${color.blue}, ${alpha.toFixed(3)})`
+}
 
 const buildMetricProfiles = (zones: ZoneProbability[]): Partial<Record<'pressure' | 'risk', MetricProfile>> => {
   const referencePoints = zones.flatMap((zone) => {
@@ -654,6 +750,7 @@ const buildPlotPoints = (
     const location = getLocationForZone(zone, seed, pitcherCommand)
     const category = getPointCategory(zone, mode, seed, location, metricProfiles)
     const outcome = getSampleOutcome(zone, location, seed)
+    const detailMetrics = getLocationAdjustedMetrics(zone, location)
     const metricValue = mode === 'pressure' || mode === 'risk' ? ` / 지수 ${Math.round(getPointMetricValue(zone, mode, location))}` : ''
 
     return {
@@ -665,10 +762,15 @@ const buildPlotPoints = (
       categoryKey: category.key,
       label: category.label,
       color: category.color,
-      title: `${category.label}${metricValue} / ${pitchTypeLabels[zone.pitchType]} / ${zoneLabels[zone.zoneId]}`,
+      title: `${category.label}${metricValue} / ${pitchTypeLabels[zone.pitchType]} / ${zoneLabels[zone.zoneId]} / 헛스윙 ${formatPercent(detailMetrics.whiffProbability)} / 피안타 ${formatPercent(detailMetrics.hitProbability)} / 컨택 ${formatPercent(detailMetrics.contactProbability)}`,
       count: 1,
       onBaseProbability: outcome.onBaseProbability,
       outProbability: outcome.outProbability,
+      battingAverage: detailMetrics.battingAverage,
+      hitProbability: detailMetrics.hitProbability,
+      whiffProbability: detailMetrics.whiffProbability,
+      contactProbability: detailMetrics.contactProbability,
+      swingProbability: detailMetrics.swingProbability,
       dataQuality: zone.dataQuality ?? (zone.sampleLocations && zone.sampleLocations.length > 0 ? 'observed' : 'predicted')
     }
   })
@@ -679,11 +781,81 @@ const buildPlotPoints = (
   }
 }
 
+const getHeatmapMetricValue = (
+  zone: ZoneProbability,
+  metric: Exclude<HeatmapMetric, 'none'>,
+  location: { x: number; y: number }
+): number => {
+  const metrics = getLocationAdjustedMetrics(zone, location)
+
+  if (metric === 'contactProbability') {
+    return metrics.contactProbability
+  }
+
+  return metrics[metric]
+}
+
+const buildHeatmapCells = (zones: ZoneProbability[], metric: HeatmapMetric): HeatmapCell[] => {
+  if (metric === 'none' || zones.length === 0) {
+    return []
+  }
+
+  const columns = 24
+  const rows = 24
+  const cells: HeatmapCell[] = []
+  const rawCells: Array<HeatmapCell & { raw: number }> = []
+
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      const x = plotBounds.left + ((plotBounds.right - plotBounds.left) * (column + 0.5)) / columns
+      const y = plotBounds.top + ((plotBounds.bottom - plotBounds.top) * (row + 0.5)) / rows
+      const weighted = zones.reduce((sum, zone) => {
+        const center = zoneCenters[zone.zoneId]
+        const distance = Math.hypot(x - center.x, y - center.y)
+        const sigma = isInsideStrikeZone({ x, y }) ? 12.5 : 15.5
+        const falloff = Math.exp(-(distance * distance) / (2 * sigma * sigma))
+
+        return sum + getHeatmapMetricValue(zone, metric, { x, y }) * Math.max(zone.pitchProbability, 0.03) * falloff
+      }, 0)
+      const weight = zones.reduce((sum, zone) => {
+        const center = zoneCenters[zone.zoneId]
+        const distance = Math.hypot(x - center.x, y - center.y)
+        const sigma = isInsideStrikeZone({ x, y }) ? 12.5 : 15.5
+
+        return sum + Math.max(zone.pitchProbability, 0.03) * Math.exp(-(distance * distance) / (2 * sigma * sigma))
+      }, 0)
+      const value = weight > 0 ? weighted / weight : 0
+
+      rawCells.push({ key: `${metric}-${row}-${column}`, x, y, intensity: 0, value, raw: weighted })
+    }
+  }
+
+  const values = rawCells.map((cell) => cell.value)
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const range = Math.max(max - min, 0.001)
+
+  rawCells.forEach((cell) => {
+    const intensity = Math.min(Math.max((cell.value - min) / range, 0), 1)
+
+    if (intensity > 0.04 || cell.raw > 0.002) {
+      cells.push({
+        key: cell.key,
+        x: cell.x,
+        y: cell.y,
+        intensity,
+        value: cell.value
+      })
+    }
+  })
+
+  return cells
+}
+
 function PitchBreakdownChart({
   zones,
   pitchTypes,
   selectedPitchType,
-  selectedZoneId,
   pitchMapMode,
   pitchMapSampleCount,
   pitchClusterRadius,
@@ -695,6 +867,8 @@ function PitchBreakdownChart({
   onSelectPitchMapSampleCount,
   onChangePitchClusterRadius
 }: PitchBreakdownChartProps): React.JSX.Element {
+  const [heatmapMetric, setHeatmapMetric] = useState<HeatmapMetric>('whiffProbability')
+  const [heatmapOpacity, setHeatmapOpacity] = useState(0.42)
   const visibleZones =
     selectedPitchType === 'ALL' ? zones : zones.filter((zone) => zone.pitchType === selectedPitchType)
   const { points, summary } = buildPlotPoints(
@@ -705,6 +879,7 @@ function PitchBreakdownChart({
     simulationVersion,
     pitcherCommand
   )
+  const heatmapCells = useMemo(() => buildHeatmapCells(visibleZones, heatmapMetric), [heatmapMetric, visibleZones])
   const isPredictionOnly = points.length > 0 && points.every((point) => point.dataQuality === 'predicted')
   const legendCategories = getLegendCategories(pitchTypes, pitchMapMode)
 
@@ -739,6 +914,21 @@ function PitchBreakdownChart({
       <div className="pitch-plot">
         <div className="batter batter-left" />
         <div className="batter batter-right" />
+        {heatmapMetric !== 'none' ? (
+          <div className="pitch-heatmap" aria-hidden="true">
+            {heatmapCells.map((cell) => (
+              <span
+                key={cell.key}
+                style={{
+                  left: `${cell.x}%`,
+                  top: `${cell.y}%`,
+                  background: `radial-gradient(circle, ${getHeatmapColor(cell.intensity, 1)} ${Math.round(22 + cell.intensity * 28)}%, transparent 74%)`,
+                  opacity: heatmapOpacity * (0.16 + cell.intensity * 0.7)
+                }}
+              />
+            ))}
+          </div>
+        ) : null}
         <div className="strike-zone-outline">
           <span />
           <span />
@@ -747,9 +937,7 @@ function PitchBreakdownChart({
         </div>
         {points.map((point) => (
           <button
-            className={`pitch-dot ${pitchMapSampleCount >= 1000 ? 'pitch-dot-dense' : pitchMapSampleCount >= 100 ? 'pitch-dot-compact' : ''} ${point.dataQuality === 'predicted' ? 'pitch-dot-predicted' : ''} ${
-              point.zoneId === selectedZoneId ? 'pitch-dot-selected' : ''
-            }`}
+            className={`pitch-dot ${pitchMapSampleCount >= 1000 ? 'pitch-dot-dense' : pitchMapSampleCount >= 100 ? 'pitch-dot-compact' : ''} ${point.dataQuality === 'predicted' ? 'pitch-dot-predicted' : ''}`}
             key={point.key}
             style={{
               left: `${point.x}%`,
@@ -761,7 +949,15 @@ function PitchBreakdownChart({
             type="button"
             title={point.title}
             onClick={() => onSelectZone(point.zoneId, point.pitchType)}
-          />
+          >
+            <span className="pitch-dot-tooltip">
+              <strong>{point.count > 1 ? `${point.count}구 묶음` : `${pitchTypeLabels[point.pitchType]} ${zoneLabels[point.zoneId]}`}</strong>
+              <span>헛스윙 {formatPercent(point.whiffProbability)}</span>
+              <span>피안타 {formatPercent(point.hitProbability)}</span>
+              <span>컨택 {formatPercent(point.contactProbability)}</span>
+              <span>타율 {formatAverage(point.battingAverage)}</span>
+            </span>
+          </button>
         ))}
         <div className="plot-caption">
           {pitchMapSampleCount.toLocaleString()}회 샘플 · {isPredictionOnly ? '예측 보정 위치' : '실측 기반 위치'}
@@ -822,6 +1018,36 @@ function PitchBreakdownChart({
                 </button>
               ))}
             </div>
+          </div>
+          <div className="pitch-filter">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">확률분포 필터</span>
+            <div className="pitch-filter-buttons heatmap-filter-buttons">
+              {heatmapMetrics.map((metric) => (
+                <button
+                  className={heatmapMetric === metric.key ? 'active' : ''}
+                  key={metric.key}
+                  type="button"
+                  onClick={() => setHeatmapMetric(metric.key)}
+                >
+                  <span />
+                  {metric.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="pitch-filter pitch-density-control">
+            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500" htmlFor="heatmap-opacity">
+              분포 투명도 {Math.round(heatmapOpacity * 100)}%
+            </label>
+            <input
+              id="heatmap-opacity"
+              max="0.8"
+              min="0.08"
+              step="0.02"
+              type="range"
+              value={heatmapOpacity}
+              onChange={(event) => setHeatmapOpacity(Number(event.target.value))}
+            />
           </div>
           <div className="pitch-filter pitch-density-control">
             <label className="text-xs font-semibold uppercase tracking-wide text-slate-500" htmlFor="pitch-cluster-radius">
