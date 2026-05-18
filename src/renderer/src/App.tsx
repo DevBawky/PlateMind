@@ -373,14 +373,39 @@ function App(): React.JSX.Element {
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 px-6 py-6 text-slate-100">
+    <main className="app-window min-h-screen bg-slate-950 text-slate-100">
+      <div className="app-titlebar">
+        <div className="app-titlebar-brand">
+          <span className="app-titlebar-mark">PM</span>
+          <span>PLATEMIND</span>
+        </div>
+        <div className="window-controls">
+          <button aria-label="Minimize" type="button" onClick={() => window.api.minimizeWindow()}>
+            <span />
+          </button>
+          <button aria-label="Maximize" type="button" onClick={() => window.api.toggleMaximizeWindow()}>
+            <span />
+          </button>
+          <button aria-label="Close" className="window-control-close" type="button" onClick={() => window.api.closeWindow()}>
+            <span />
+          </button>
+        </div>
+      </div>
       <div className="app-shell">
         <header className="app-header">
-          <div>
-            <h1 className="text-3xl font-bold text-white">PlateMind</h1>
-            <p className="mt-1 text-xl text-slate-300">
-              {selectedPitcher?.name ?? '투수 미선택'} 대 {selectedBatter?.name ?? '타자 미선택'}
-            </p>
+          <div className="app-header-main">
+            <h1 className="text-3xl font-bold text-white">PLATEMIND</h1>
+            <div className="header-matchup">
+              <div className="header-matchup-player">
+                <span>Pitcher</span>
+                <strong>{selectedPitcher?.name ?? 'Not selected'}</strong>
+              </div>
+              <div className="header-matchup-vs">vs</div>
+              <div className="header-matchup-player">
+                <span>Batter</span>
+                <strong>{selectedBatter?.name ?? 'Not selected'}</strong>
+              </div>
+            </div>
           </div>
           <div className="header-summary">
             <span>{pitcherPitchTypes.length}개 구종</span>

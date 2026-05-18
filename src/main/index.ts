@@ -97,16 +97,44 @@ const registerBaseballSavantIpc = (): void => {
   })
 }
 
+const registerWindowControlsIpc = (): void => {
+  ipcMain.on('window-control:minimize', (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.minimize()
+  })
+
+  ipcMain.on('window-control:toggle-maximize', (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+
+    if (!window) {
+      return
+    }
+
+    if (window.isMaximized()) {
+      window.unmaximize()
+    } else {
+      window.maximize()
+    }
+  })
+
+  ipcMain.on('window-control:close', (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.close()
+  })
+}
+
 function createWindow(): void {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
+    title: 'PLATEMIND',
     width: 1440,
     height: 900,
     minWidth: 1180,
     minHeight: 760,
     show: false,
+    frame: false,
+    ...(process.platform === 'win32' ? { thickFrame: false } : {}),
+    titleBarStyle: 'hidden',
     autoHideMenuBar: true,
-    ...(process.platform === 'linux' ? { icon } : {}),
+    icon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false
@@ -151,11 +179,13 @@ function createWindow(): void {
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
   // Set app user model id for windows
-  app.setAppUserModelId(isDev ? process.execPath : 'com.electron')
+  app.setAppUserModelId('com.platemind.app')
+  app.setName('PLATEMIND')
 
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
   registerBaseballSavantIpc()
+  registerWindowControlsIpc()
 
   createWindow()
 

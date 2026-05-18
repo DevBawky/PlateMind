@@ -15,7 +15,7 @@ function StrikeZoneBoard({ zones, selectedZoneId, onSelectZone }: StrikeZoneBoar
     <section className="flex min-w-0 flex-col gap-4">
       <div>
         <p className="text-sm font-semibold uppercase tracking-wide text-slate-400">스트라이크 존 보드</p>
-        <h1 className="text-3xl font-bold text-white">PlateMind MVP</h1>
+        <h1 className="text-3xl font-bold text-white">PLATEMIND MVP</h1>
       </div>
       {zones.length > 0 ? (
         <div className="strike-zone-board">

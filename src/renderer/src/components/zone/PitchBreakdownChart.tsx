@@ -53,6 +53,13 @@ interface PlotCategory {
   color: string
 }
 
+interface MetricProfile {
+  veryHigh: number
+  high: number
+  low: number
+  veryLow: number
+}
+
 const pitchTypeLabels: Record<PitchType, string> = {
   FF: '포심 패스트볼',
   SL: '슬라이더',
@@ -95,6 +102,14 @@ const pitchMapModes: Array<{ key: PitchMapMode; label: string }> = [
   { key: 'risk', label: '위험' }
 ]
 
+const pitchMapModeDescriptions: Record<PitchMapMode, string> = {
+  pitchType: '구종 모드는 패스트볼, 슬라이더, 체인지업처럼 실제 구종별 사용 위치와 밀집도를 색으로 구분합니다.',
+  pitchResult: '결과 모드는 헛스윙, 루킹, 타격 가능성이 높은 공을 나눠 타석 결과 흐름을 보여줍니다.',
+  countResult: 'S/B 모드는 스트라이크존 안팎의 분포를 기준으로 스트라이크와 볼 성향을 분리합니다.',
+  pressure: '압박 모드는 헛스윙 가능성, 존 공략, 카운트 우위, 피안타 억제력을 합쳐 현재 분포 안에서 압박 강도를 세분화합니다.',
+  risk: '위험 모드는 피안타, 장타, 볼넷성 이탈, 컨택 허용 가능성을 합산해 현재 분포 안에서 실점 위험을 세분화합니다.'
+}
+
 const pitchMapSampleCounts: PitchMapSampleCount[] = [10, 100, 1000]
 
 const resultCategories: Record<string, PlotCategory> = {
@@ -109,15 +124,19 @@ const countCategories: Record<string, PlotCategory> = {
 }
 
 const pressureCategories: Record<string, PlotCategory> = {
-  high: { key: 'high', label: '높은 압박', color: '#059669' },
-  medium: { key: 'medium', label: '보통', color: '#d97706' },
-  low: { key: 'low', label: '낮은 압박', color: '#64748b' }
+  veryHigh: { key: 'veryHigh', label: '압박 최상', color: '#22c55e' },
+  high: { key: 'high', label: '높은 압박', color: '#84cc16' },
+  medium: { key: 'medium', label: '중간 압박', color: '#f59e0b' },
+  low: { key: 'low', label: '낮은 압박', color: '#38bdf8' },
+  veryLow: { key: 'veryLow', label: '압박 약함', color: '#64748b' }
 }
 
 const riskCategories: Record<string, PlotCategory> = {
-  high: { key: 'high', label: '위험', color: '#dc2626' },
+  veryHigh: { key: 'veryHigh', label: '치명 위험', color: '#ef4444' },
+  high: { key: 'high', label: '높은 위험', color: '#f97316' },
   medium: { key: 'medium', label: '주의', color: '#f59e0b' },
-  low: { key: 'low', label: '안전', color: '#16a34a' }
+  low: { key: 'low', label: '관리 가능', color: '#14b8a6' },
+  veryLow: { key: 'veryLow', label: '안전', color: '#22c55e' }
 }
 
 const zoneCenters: Record<ZoneId, { x: number; y: number }> = {
@@ -300,17 +319,94 @@ const getPitchResultCategory = (zone: ZoneProbability, seed: string): PlotCatego
   return resultCategories.contact
 }
 
-const getMetricCategory = (
-  value: number,
-  categories: Record<string, PlotCategory>,
-  highThreshold: number,
-  lowThreshold: number
-): PlotCategory => {
-  if (value >= highThreshold) {
+const getQuantile = (values: number[], percentile: number): number => {
+  if (values.length === 0) {
+    return 0
+  }
+
+  const sortedValues = [...values].sort((first, second) => first - second)
+  const index = (sortedValues.length - 1) * percentile
+  const lowerIndex = Math.floor(index)
+  const upperIndex = Math.ceil(index)
+  const weight = index - lowerIndex
+
+  return sortedValues[lowerIndex] * (1 - weight) + sortedValues[upperIndex] * weight
+}
+
+const getMetricProfile = (values: number[]): MetricProfile => {
+  if (values.length === 0) {
+    return {
+      veryHigh: 80,
+      high: 65,
+      low: 40,
+      veryLow: 25
+    }
+  }
+
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+
+  if (max - min < 4) {
+    const center = (min + max) / 2
+
+    return {
+      veryHigh: center + 1.5,
+      high: center + 0.5,
+      low: center - 0.5,
+      veryLow: center - 1.5
+    }
+  }
+
+  return {
+    veryHigh: getQuantile(values, 0.82),
+    high: getQuantile(values, 0.62),
+    low: getQuantile(values, 0.38),
+    veryLow: getQuantile(values, 0.18)
+  }
+}
+
+const getPointMetricValue = (zone: ZoneProbability, mode: PitchMapMode, location: { x: number; y: number }): number => {
+  const isStrike = isInsideStrikeZone(location)
+
+  if (mode === 'pressure') {
+    const countLeverage = zone.count.endsWith('-2') ? 7 : zone.count.startsWith('3-') ? -8 : zone.count.startsWith('0-') ? 2 : 0
+
+    return (
+      zone.pressureValue +
+      zone.whiffProbability * 22 +
+      zone.pitchProbability * 16 -
+      zone.hitProbability * 16 +
+      (isStrike ? 5 : -7) +
+      countLeverage
+    )
+  }
+
+  const chasePenalty = isStrike ? -3 : 8
+
+  return (
+    zone.riskValue +
+    zone.hitProbability * 36 +
+    zone.homeRunProbability * 160 +
+    (1 - zone.whiffProbability) * 10 +
+    (zone.swingProbability > 0.58 ? 5 : 0) +
+    chasePenalty
+  )
+}
+
+const getMetricCategory = (value: number, categories: Record<string, PlotCategory>, profile: MetricProfile): PlotCategory => {
+  if (value >= profile.veryHigh) {
+    return categories.veryHigh
+  }
+
+  if (value >= profile.high) {
     return categories.high
   }
 
-  if (value <= lowThreshold) {
+  if (value <= profile.veryLow) {
+    return categories.veryLow
+  }
+
+  if (value <= profile.low) {
     return categories.low
   }
 
@@ -321,7 +417,8 @@ const getPointCategory = (
   zone: ZoneProbability,
   mode: PitchMapMode,
   seed: string,
-  location: { x: number; y: number }
+  location: { x: number; y: number },
+  metricProfiles: Partial<Record<'pressure' | 'risk', MetricProfile>>
 ): PlotCategory => {
   if (mode === 'pitchType') {
     return {
@@ -340,10 +437,10 @@ const getPointCategory = (
   }
 
   if (mode === 'pressure') {
-    return getMetricCategory(zone.pressureValue, pressureCategories, 70, 45)
+    return getMetricCategory(getPointMetricValue(zone, mode, location), pressureCategories, metricProfiles.pressure ?? getMetricProfile([]))
   }
 
-  return getMetricCategory(zone.riskValue, riskCategories, 60, 35)
+  return getMetricCategory(getPointMetricValue(zone, mode, location), riskCategories, metricProfiles.risk ?? getMetricProfile([]))
 }
 
 const getLegendCategories = (pitchTypes: PitchType[], mode: PitchMapMode): PlotCategory[] => {
@@ -364,10 +461,16 @@ const getLegendCategories = (pitchTypes: PitchType[], mode: PitchMapMode): PlotC
   }
 
   if (mode === 'pressure') {
-    return [pressureCategories.high, pressureCategories.medium, pressureCategories.low]
+    return [
+      pressureCategories.veryHigh,
+      pressureCategories.high,
+      pressureCategories.medium,
+      pressureCategories.low,
+      pressureCategories.veryLow
+    ]
   }
 
-  return [riskCategories.high, riskCategories.medium, riskCategories.low]
+  return [riskCategories.veryHigh, riskCategories.high, riskCategories.medium, riskCategories.low, riskCategories.veryLow]
 }
 
 const clusterPlotPoints = (points: PlotPoint[], radius: number): PlotPoint[] => {
@@ -489,6 +592,27 @@ const getPitchMapSummary = (points: PlotPoint[]): PitchMapSummary => {
 
 const formatPercent = (value: number): string => `${Math.round(value * 100)}%`
 
+const buildMetricProfiles = (zones: ZoneProbability[]): Partial<Record<'pressure' | 'risk', MetricProfile>> => {
+  const referencePoints = zones.flatMap((zone) => {
+    const center = zoneCenters[zone.zoneId]
+    const bounds = getZoneBounds(zone.zoneId)
+    const locations = [
+      center,
+      { x: bounds.left + 1, y: bounds.top + 1 },
+      { x: bounds.right - 1, y: bounds.bottom - 1 },
+      { x: center.x, y: strikeZoneBounds.bottom + 6 },
+      { x: strikeZoneBounds.right + 6, y: center.y }
+    ]
+
+    return locations.map((location) => ({ zone, location }))
+  })
+
+  return {
+    pressure: getMetricProfile(referencePoints.map(({ zone, location }) => getPointMetricValue(zone, 'pressure', location))),
+    risk: getMetricProfile(referencePoints.map(({ zone, location }) => getPointMetricValue(zone, 'risk', location)))
+  }
+}
+
 const buildPlotPoints = (
   zones: ZoneProbability[],
   sampleCount: PitchMapSampleCount,
@@ -506,6 +630,7 @@ const buildPlotPoints = (
 
   const observedZones = zones.filter((zone) => zone.dataQuality !== 'predicted' || (zone.sampleLocations?.length ?? 0) > 0)
   const plotZones = observedZones.length > 0 ? observedZones : zones
+  const metricProfiles = buildMetricProfiles(plotZones)
   const signature = plotZones
     .slice(0, 24)
     .map((zone) => {
@@ -527,8 +652,9 @@ const buildPlotPoints = (
     const seed = `${signature}-${sampleCount}-${simulationVersion}-${index}`
     const zone = pickWeightedZone(plotZones, seed)
     const location = getLocationForZone(zone, seed, pitcherCommand)
-    const category = getPointCategory(zone, mode, seed, location)
+    const category = getPointCategory(zone, mode, seed, location, metricProfiles)
     const outcome = getSampleOutcome(zone, location, seed)
+    const metricValue = mode === 'pressure' || mode === 'risk' ? ` / 지수 ${Math.round(getPointMetricValue(zone, mode, location))}` : ''
 
     return {
       key: seed,
@@ -539,7 +665,7 @@ const buildPlotPoints = (
       categoryKey: category.key,
       label: category.label,
       color: category.color,
-      title: `${category.label} / ${pitchTypeLabels[zone.pitchType]} / ${zoneLabels[zone.zoneId]}`,
+      title: `${category.label}${metricValue} / ${pitchTypeLabels[zone.pitchType]} / ${zoneLabels[zone.zoneId]}`,
       count: 1,
       onBaseProbability: outcome.onBaseProbability,
       outProbability: outcome.outProbability,
@@ -588,9 +714,7 @@ function PitchBreakdownChart({
         <div>
           <p className="text-sm font-semibold uppercase tracking-wide text-slate-400">투구 분포 분석</p>
           <h2 className="text-2xl font-bold text-white">구종별 코스 맵</h2>
-          <p className="mt-1 text-sm text-slate-400">
-            선택한 횟수만큼 분포를 샘플링해 선수별 데이터 양 차이를 줄이고, 모드별로 공의 의미를 다시 색칠합니다.
-          </p>
+          <p className="mt-1 text-sm text-slate-400">{pitchMapModeDescriptions[pitchMapMode]}</p>
         </div>
       </div>
 

@@ -19,7 +19,7 @@ function SelectedMatchupCard({ pitcher, batter }: SelectedMatchupCardProps): Rea
   return (
     <section className="selected-matchup-card">
       <div className="matchup-card-player">
-        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">투수</span>
+        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Pitcher</span>
         {pitcher ? (
           <>
             <strong>{pitcher.name}</strong>
@@ -31,10 +31,10 @@ function SelectedMatchupCard({ pitcher, batter }: SelectedMatchupCardProps): Rea
         )}
       </div>
 
-      <div className="matchup-vs">VS</div>
+      <div className="matchup-vs">vs</div>
 
       <div className="matchup-card-player">
-        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">타자</span>
+        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Batter</span>
         {batter ? (
           <>
             <strong>{batter.name}</strong>

@@ -4,7 +4,10 @@ import { electronAPI } from '@electron-toolkit/preload'
 // Custom APIs for renderer
 const api = {
   fetchBaseballSavantCsv: (options?: { startDate?: string; endDate?: string; playerType?: 'pitcher' | 'batter' }) =>
-    ipcRenderer.invoke('baseball-savant:fetch-csv', options)
+    ipcRenderer.invoke('baseball-savant:fetch-csv', options),
+  minimizeWindow: () => ipcRenderer.send('window-control:minimize'),
+  toggleMaximizeWindow: () => ipcRenderer.send('window-control:toggle-maximize'),
+  closeWindow: () => ipcRenderer.send('window-control:close')
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to
